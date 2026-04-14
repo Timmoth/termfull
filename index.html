@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Termfull</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    * {
+      user-select: none;
+      -webkit-user-select: none;
+      box-sizing: border-box;
+    }
+
+    input {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    body {
+      font-family: "Inter", sans-serif;
+    }
+  </style>
+</head>
+
+<body class="font-[Inter] bg-gradient-to-br from-gray-950 via-slate-900 to-gray-950 text-white h-screen flex items-center justify-center overflow-hidden">
+
+  <!-- ambient glow -->
+  <div class="absolute inset-0 pointer-events-none">
+    <div class="absolute w-[900px] h-[900px] bg-blue-500/10 blur-[140px] rounded-full left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"></div>
+    <div class="absolute w-[600px] h-[600px] bg-indigo-500/10 blur-[120px] rounded-full left-[30%] top-[60%]"></div>
+  </div>
+
+  <div class="relative w-full h-full flex items-center justify-center">
+
+    <!-- search / autocomplete -->
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 w-[min(14rem,calc(100vw-2rem))]">
+      <div class="relative">
+        <!-- inline ghost text -->
+        <div
+          id="ghost"
+          class="pointer-events-none absolute inset-0 px-6 py-4 text-lg rounded-2xl text-center text-white/20 whitespace-nowrap overflow-hidden flex items-center justify-center"
+          aria-hidden="true"
+        ></div>
+
+<input
+  id="search"
+  type="text"
+  autocomplete="off"
+  spellcheck="false"
+  placeholder="Type a word..."
+  class="relative z-10 w-full px-6 py-4 text-lg rounded-2xl
+  bg-white/[0.06] backdrop-blur-xl
+  border border-white/10
+  text-white/80
+  placeholder:text-white/30
+  focus:outline-none focus:ring-2 focus:ring-blue-400/30
+  text-center
+  shadow-[0_10px_40px_rgba(0,0,0,0.45)]"
+/>
+        <div
+          id="suggestions"
+          class="absolute left-0 right-0 mt-3 hidden overflow-hidden rounded-2xl border border-white/10 bg-white/6 backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.35)]"
+        ></div>
+      </div>
+    </div>
+
+    <svg id="lines" class="absolute inset-0 w-full h-full"></svg>
+    <div id="cloud" class="absolute inset-0"></div>
+
+  </div>
+
+  <!-- vignette -->
+  <div class="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_40%,rgba(0,0,0,0.6))]"></div>
+
+  <!-- footer -->
+  <div class="absolute bottom-4 w-full text-center text-white/30 text-sm z-40">
+    <span class="text-white/45">termfull</span>
+    <span class="mx-1 text-white/20">·</span>
+    
+    <a href="https://github.com/timmoth" target="_blank" rel="noopener noreferrer" class="underline decoration-white/20 underline-offset-4 hover:text-white/70">
+      Tim Jones
+    </a>
+  </div>
+
+<script>
+const NUM_SHARDS = 500;
+const shardCache = {};
+let animationFrame;
+let nodes = [];
+
+// -------- AUTOCOMPLETE --------
+let dictionary = [];
+let filteredSuggestions = [];
+let selectedSuggestionIndex = -1;
+let currentGhost = "";
+
+async function loadDictionary() {
+  try {
+    const res = await fetch("words.csv");
+    const text = await res.text();
+
+    dictionary = text
+      .trim()
+      .split(/\r?\n/)
+      .slice(1)
+      .map(line => line.trim().toLowerCase())
+      .filter(Boolean);
+
+    dictionary = [...new Set(dictionary)];
+  } catch (err) {
+    console.warn("Could not load words.csv for autocomplete", err);
+  }
+}
+
+function setGhostText(inputValue, suggestion) {
+  const ghost = document.getElementById("ghost");
+
+  if (!inputValue || !suggestion || !suggestion.startsWith(inputValue.toLowerCase()) || suggestion === inputValue.toLowerCase()) {
+    ghost.textContent = "";
+    currentGhost = "";
+    return;
+  }
+
+  currentGhost = suggestion;
+
+  const typed = inputValue;
+  const remaining = suggestion.slice(inputValue.length);
+  ghost.innerHTML = `<span class="opacity-0">${escapeHtml(typed)}</span><span>${escapeHtml(remaining)}</span>`;
+}
+
+function clearSuggestions() {
+  filteredSuggestions = [];
+  selectedSuggestionIndex = -1;
+  document.getElementById("suggestions").classList.add("hidden");
+  document.getElementById("suggestions").innerHTML = "";
+  setGhostText("", "");
+}
+
+function renderSuggestions(inputValue) {
+  const box = document.getElementById("suggestions");
+
+  if (!inputValue || !dictionary.length) {
+    clearSuggestions();
+    return;
+  }
+
+  const q = inputValue.toLowerCase().trim();
+  if (!q) {
+    clearSuggestions();
+    return;
+  }
+
+  const starts = [];
+  const contains = [];
+
+  for (const word of dictionary) {
+    if (word.startsWith(q)) {
+      starts.push(word);
+    } else if (word.includes(q)) {
+      contains.push(word);
+    }
+
+    if (starts.length >= 8 && contains.length >= 8) break;
+  }
+
+  filteredSuggestions = [...starts, ...contains].slice(0, 8);
+
+  if (!filteredSuggestions.length) {
+    clearSuggestions();
+    return;
+  }
+
+  if (selectedSuggestionIndex >= filteredSuggestions.length) {
+    selectedSuggestionIndex = -1;
+  }
+
+  const ghostSuggestion =
+    selectedSuggestionIndex >= 0
+      ? filteredSuggestions[selectedSuggestionIndex]
+      : filteredSuggestions[0];
+
+  setGhostText(inputValue, ghostSuggestion);
+
+  box.innerHTML = filteredSuggestions.map((word, i) => {
+    const active = i === selectedSuggestionIndex;
+    return `
+      <button
+        type="button"
+        data-index="${i}"
+        class="w-full text-left px-4 py-3 text-sm transition-colors ${
+          active ? "bg-white/12 text-white" : "text-white/75 hover:bg-white/8 hover:text-white"
+        }"
+      >
+        ${highlightMatch(word, q)}
+      </button>
+    `;
+  }).join("");
+
+  box.classList.remove("hidden");
+
+  [...box.querySelectorAll("button")].forEach(btn => {
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const i = Number(btn.dataset.index);
+      acceptSuggestion(i);
+    });
+  });
+}
+
+function acceptSuggestion(index = null) {
+  const search = document.getElementById("search");
+
+  let chosen = null;
+
+  if (index !== null && filteredSuggestions[index]) {
+    chosen = filteredSuggestions[index];
+  } else if (selectedSuggestionIndex >= 0 && filteredSuggestions[selectedSuggestionIndex]) {
+    chosen = filteredSuggestions[selectedSuggestionIndex];
+  } else if (filteredSuggestions[0]) {
+    chosen = filteredSuggestions[0];
+  } else if (currentGhost) {
+    chosen = currentGhost;
+  }
+
+  if (!chosen) return;
+
+  search.value = chosen;
+  clearSuggestions();
+  performSearch(chosen);
+}
+
+function highlightMatch(word, q) {
+  const idx = word.indexOf(q);
+  if (idx === -1) return escapeHtml(word);
+
+  const before = escapeHtml(word.slice(0, idx));
+  const match = escapeHtml(word.slice(idx, idx + q.length));
+  const after = escapeHtml(word.slice(idx + q.length));
+  return `${before}<span class="text-blue-300">${match}</span>${after}`;
+}
+
+function escapeHtml(str) {
+  return str
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+// -------- STYLE HELPERS --------
+function getSize(i, total) {
+  return 32 - (i / total) * 20;
+}
+
+function getOpacity(i, total) {
+  return 1 - (i / total) * 0.6;
+}
+
+function getHue(i) {
+  const hues = [200, 220, 240];
+  return hues[i % hues.length];
+}
+
+// -------- HASH --------
+function shardId(word) {
+  word = word.toLowerCase().trim();
+  let h = 0;
+  for (let i = 0; i < word.length; i++) {
+    h = (h * 31 + word.charCodeAt(i)) % NUM_SHARDS;
+  }
+  return h;
+}
+
+// -------- LOAD --------
+async function loadShard(id) {
+  if (shardCache[id]) return shardCache[id];
+
+  const res = await fetch(`shards/shard_${String(id).padStart(2, '0')}.csv`);
+  const text = await res.text();
+
+  const lines = text.trim().split("\n");
+  const data = {};
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",");
+    data[cols[0]] = cols.slice(1).filter(Boolean);
+  }
+
+  shardCache[id] = data;
+  return data;
+}
+
+async function getNeighbors(word) {
+  const sid = shardId(word);
+  const shard = await loadShard(sid);
+  return shard[word] || null;
+}
+
+async function performSearch(word) {
+  word = word.toLowerCase().trim();
+  if (!word) return;
+
+  const neighbors = await getNeighbors(word);
+  if (!neighbors) return;
+
+  updateNodes(neighbors);
+}
+
+// -------- CREATE --------
+function createNodes(words) {
+  const cloud = document.getElementById("cloud");
+  const svg = document.getElementById("lines");
+
+  cloud.innerHTML = "";
+  svg.innerHTML = "";
+
+  const cx = window.innerWidth / 2;
+  const cy = window.innerHeight / 2;
+
+  nodes = words.map((word, i) => {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 150 + Math.random() * 250;
+
+    const size = getSize(i, words.length);
+    const hue = getHue(i);
+
+    const node = {
+      word,
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+      vx: 0,
+      vy: 0,
+      size,
+      offset: Math.random() * 1000
+    };
+
+    const el = document.createElement("div");
+
+    el.className = `
+      absolute font-medium cursor-pointer
+      px-3 py-1.5 rounded-full
+      backdrop-blur-md
+      border border-white/10
+      transition-all duration-300 ease-out
+      hover:scale-110 hover:text-white
+    `;
+
+    el.style.background = `hsla(${hue}, 70%, 60%, 0.08)`;
+    el.style.color = `hsla(${hue}, 90%, 85%, ${getOpacity(i, words.length)})`;
+    el.style.boxShadow = `0 0 20px hsla(${hue}, 80%, 60%, 0.15)`;
+
+    el.onmousedown = (e) => startDrag(node, e);
+    el.onclick = () => {
+      search.value = node.word;
+      clearSuggestions();
+      performSearch(node.word);
+    };
+
+    cloud.appendChild(el);
+    node.el = el;
+
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("stroke", "#60a5fa");
+    line.setAttribute("stroke-opacity", "0.12");
+
+    svg.appendChild(line);
+    node.line = line;
+
+    return node;
+  });
+
+  updateNodes(words);
+  animate(0);
+}
+
+// -------- UPDATE --------
+function updateNodes(words) {
+  if (nodes.length === 0) {
+    createNodes(words);
+    return;
+  }
+
+  nodes.forEach((node, i) => {
+    node.word = words[i] || "";
+    node.size = getSize(i, words.length);
+
+    node.el.textContent = node.word;
+    node.el.style.fontSize = `${node.size}px`;
+    node.el.style.opacity = getOpacity(i, words.length);
+  });
+}
+
+// -------- DRAG --------
+let draggingNode = null;
+let lastMouse = { x: 0, y: 0 };
+
+function startDrag(node, e) {
+  draggingNode = node;
+  lastMouse.x = e.clientX;
+  lastMouse.y = e.clientY;
+}
+
+window.addEventListener("mousemove", (e) => {
+  if (!draggingNode) return;
+
+  const dx = e.clientX - lastMouse.x;
+  const dy = e.clientY - lastMouse.y;
+
+  draggingNode.x = e.clientX;
+  draggingNode.y = e.clientY;
+
+  draggingNode.vx = dx;
+  draggingNode.vy = dy;
+
+  lastMouse.x = e.clientX;
+  lastMouse.y = e.clientY;
+});
+
+window.addEventListener("mouseup", () => {
+  draggingNode = null;
+});
+
+// -------- ANIMATION --------
+function animate(time) {
+  const cx = window.innerWidth / 2;
+  const cy = window.innerHeight / 2;
+
+  const centerRadius = 160;
+
+  nodes.forEach(a => {
+    if (a === draggingNode) return;
+
+    a.vx += Math.sin(time * 0.001 + a.offset) * 0.05;
+    a.vy += Math.cos(time * 0.001 + a.offset) * 0.05;
+
+    let dx = a.x - cx;
+    let dy = a.y - cy;
+    let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+    const min = centerRadius + a.size * 2;
+
+    if (dist < min) {
+      const push = (min - dist);
+      dx /= dist;
+      dy /= dist;
+
+      a.x += dx * push;
+      a.y += dy * push;
+
+      a.vx += dx * push * 0.2;
+      a.vy += dy * push * 0.2;
+    }
+  });
+
+  // soft repulsion
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i];
+      const b = nodes[j];
+
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      const range = 220;
+
+      if (dist < range) {
+        dx /= dist;
+        dy /= dist;
+
+        const force = (1 - dist / range) * 0.08;
+
+        if (a !== draggingNode) {
+          a.vx -= dx * force;
+          a.vy -= dy * force;
+        }
+        if (b !== draggingNode) {
+          b.vx += dx * force;
+          b.vy += dy * force;
+        }
+      }
+    }
+  }
+
+  // hard collision
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i];
+      const b = nodes[j];
+
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+      const min = 60 + a.size + b.size;
+
+      if (dist < min) {
+        const overlap = (min - dist);
+
+        dx /= dist;
+        dy /= dist;
+
+        if (a !== draggingNode) {
+          a.x -= dx * overlap * 0.6;
+          a.y -= dy * overlap * 0.6;
+        }
+        if (b !== draggingNode) {
+          b.x += dx * overlap * 0.6;
+          b.y += dy * overlap * 0.6;
+        }
+      }
+    }
+  }
+
+  nodes.forEach(n => {
+    if (n !== draggingNode) {
+      n.vx *= 0.88;
+      n.vy *= 0.88;
+
+      n.x += n.vx;
+      n.y += n.vy;
+    }
+
+    // apply position
+    n.el.style.left = `${n.x}px`;
+    n.el.style.top = `${n.y}px`;
+    n.el.style.transform = "translate(-50%, -50%)";
+
+    const rect = n.el.getBoundingClientRect();
+    const halfW = rect.width / 2;
+    const halfH = rect.height / 2;
+
+    const minX = halfW;
+    const maxX = window.innerWidth - halfW;
+    const minY = halfH;
+    const maxY = window.innerHeight - halfH;
+
+    // hard clamp
+    n.x = Math.max(minX, Math.min(maxX, n.x));
+    n.y = Math.max(minY, Math.min(maxY, n.y));
+
+    if (n.x === minX || n.x === maxX) n.vx *= -0.3;
+    if (n.y === minY || n.y === maxY) n.vy *= -0.3;
+
+    // re-apply corrected position
+    n.el.style.left = `${n.x}px`;
+    n.el.style.top = `${n.y}px`;
+
+    // depth fade
+    const dx = n.x - cx;
+    const dy = n.y - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    const maxDist = Math.min(cx, cy);
+    const fade = 1 - (dist / maxDist);
+
+n.el.style.opacity = Math.max(0.52, fade * 0.85);
+n.el.style.filter = `blur(${(1 - fade) * 0.5}px)`;
+
+    // update line
+    const rect2 = n.el.getBoundingClientRect();
+    const cx2 = rect2.left + rect2.width / 2;
+    const cy2 = rect2.top + rect2.height / 2;
+
+    n.line.setAttribute("x1", cx);
+    n.line.setAttribute("y1", cy);
+    n.line.setAttribute("x2", cx2);
+    n.line.setAttribute("y2", cy2);
+  });
+
+  animationFrame = requestAnimationFrame(animate);
+}
+
+// -------- INPUT --------
+let timeout;
+const search = document.getElementById("search");
+
+search.addEventListener("input", (e) => {
+  clearTimeout(timeout);
+  renderSuggestions(e.target.value);
+
+  timeout = setTimeout(() => {
+    performSearch(e.target.value);
+  }, 200);
+});
+
+search.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") {
+    if (filteredSuggestions.length) {
+      e.preventDefault();
+      acceptSuggestion();
+    }
+    return;
+  }
+
+  if (e.key === "ArrowDown") {
+    if (!filteredSuggestions.length) return;
+    e.preventDefault();
+    selectedSuggestionIndex = (selectedSuggestionIndex + 1) % filteredSuggestions.length;
+    renderSuggestions(search.value);
+    return;
+  }
+
+  if (e.key === "ArrowUp") {
+    if (!filteredSuggestions.length) return;
+    e.preventDefault();
+    selectedSuggestionIndex = selectedSuggestionIndex <= 0
+      ? filteredSuggestions.length - 1
+      : selectedSuggestionIndex - 1;
+    renderSuggestions(search.value);
+    return;
+  }
+
+  if (e.key === "Enter") {
+    if (selectedSuggestionIndex >= 0 && filteredSuggestions[selectedSuggestionIndex]) {
+      e.preventDefault();
+      acceptSuggestion(selectedSuggestionIndex);
+      return;
+    }
+
+    clearSuggestions();
+    performSearch(search.value);
+    return;
+  }
+
+  if (e.key === "Escape") {
+    clearSuggestions();
+  }
+});
+
+search.addEventListener("blur", () => {
+  setTimeout(() => {
+    document.getElementById("suggestions").classList.add("hidden");
+  }, 100);
+});
+
+search.addEventListener("focus", () => {
+  if (search.value.trim()) {
+    renderSuggestions(search.value);
+  }
+});
+
+window.addEventListener("resize", () => {
+  nodes.forEach(n => {
+    n.x = Math.max(0, Math.min(window.innerWidth, n.x));
+    n.y = Math.max(0, Math.min(window.innerHeight, n.y));
+  });
+});
+
+// startup
+loadDictionary();
+</script>
+
+</body>
+</html>

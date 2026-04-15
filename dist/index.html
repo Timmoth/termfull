@@ -128,6 +128,8 @@ let dictionaryFreqMap = {};
 let filteredSuggestions = [];
 let selectedSuggestionIndex = -1;
 let currentGhost = "";
+let dictionaryLoaded = false;
+const TOTAL_CHUNKS = 9;
 
 function getCenter() {
   if (window.visualViewport) {
@@ -144,30 +146,36 @@ function getCenter() {
 
 async function loadDictionary() {
   try {
-    const res = await fetch("words_freq.csv");
-    const text = await res.text();
+    // Load chunks progressively with backpressure control
+    for (let chunkIdx = 0; chunkIdx < TOTAL_CHUNKS; chunkIdx++) {
+      const chunkNum = String(chunkIdx).padStart(3, "0");
+      const res = await fetch(`words_freq_chunk_${chunkNum}.csv`);
+      const text = await res.text();
+      const lines = text.trim().split(/\r?\n/);
 
-    const lines = text.trim().split(/\r?\n/);
-    dictionary = [];
-    dictionaryFreqMap = {};
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(",");
+        const word = (cols[0] || "").trim().toLowerCase();
+        const freq = Number((cols[1] || "").trim());
 
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(",");
-      const word = (cols[0] || "").trim().toLowerCase();
-      const freq = Number((cols[1] || "").trim());
+        if (!word) continue;
+        if (Number.isNaN(freq)) continue;
 
-      if (!word) continue;
-      if (Number.isNaN(freq)) continue;
+        if (!(word in dictionaryFreqMap)) {
+          dictionary.push(word);
+          dictionaryFreqMap[word] = freq;
+        }
+      }
 
-      if (!(word in dictionaryFreqMap)) {
-        dictionary.push(word);
-        dictionaryFreqMap[word] = freq;
+      // Yield to event loop between chunks
+      if (chunkIdx < TOTAL_CHUNKS - 1) {
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
 
-    dictionary = [...new Set(dictionary)];
+    dictionaryLoaded = true;
   } catch (err) {
-    console.warn("Could not load words_freq.csv for autocomplete", err);
+    console.warn("Could not load words_freq chunks for autocomplete", err);
   }
 }
 
@@ -203,7 +211,12 @@ function clearSuggestions() {
 function renderSuggestions(inputValue) {
   const box = document.getElementById("suggestions");
 
-  if (!inputValue || !dictionary.length) {
+  if (!inputValue) {
+    clearSuggestions();
+    return;
+  }
+
+  if (!dictionaryLoaded && dictionary.length < 1000) {
     clearSuggestions();
     return;
   }
@@ -223,6 +236,8 @@ function renderSuggestions(inputValue) {
     } else if (word.includes(q)) {
       contains.push(word);
     }
+    // Stop after finding enough matches for better performance during load
+    if (starts.length + contains.length >= 50) break;
   }
 
   const byFreqDesc = (a, b) => {

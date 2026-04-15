@@ -8,13 +8,14 @@ TOP_K = 20
 BATCH_SIZE = 256
 MODEL_NAME = "BAAI/bge-base-en-v1.5"
 
-CANDIDATE_POOL = TOP_K * 15
-FREQ_WEIGHT = 0.3
-DIVERSITY_WEIGHT = 0.25  # MMR strength
+CANDIDATE_POOL = TOP_K * 10
+SEARCH_BATCH_SIZE = 1024
 
-SEARCH_BATCH_SIZE = 512
-
-LIMIT = None  # e.g. 10_000 to cap rows
+FREQ_WEIGHT = 0.1
+DIVERSITY_WEIGHT = 0.1
+SIM_THRESHOLD = 0.6
+LIMIT = None
+USE_POS_FILTER = False
 # ------------------------
 
 print("Loading model...")
@@ -30,36 +31,22 @@ except Exception:
     pass
 
 
-# -------- NORMALIZATION --------
+# -------- CLEANING --------
 _punct_re = re.compile(r"[^\w\s]")
 
 def clean_word(word):
-    """For embeddings (only remove punctuation)"""
     return _punct_re.sub("", word.lower()).strip()
 
 
-def dedupe_key(word):
-    """For deduplication (light normalization)"""
-    word = clean_word(word)
-
-    if word.endswith("ly"):
-        word = word[:-2]
-    elif word.endswith("ity"):
-        word = word[:-3]
-    elif word.endswith("er"):
-        word = word[:-2]
-    elif word.endswith("est"):
-        word = word[:-3]
-
-    return word
-
-
 # -------- LOAD --------
-def load_words_and_freqs():
+def load_words():
     word_freqs = {}
+    word_pos = {}
+    word_lemma = {}
 
     with open("terms.csv", encoding="utf-8") as f:
         reader = csv.DictReader(f)
+
         for i, row in enumerate(reader):
             if LIMIT and i >= LIMIT:
                 break
@@ -68,20 +55,28 @@ def load_words_and_freqs():
             if not word:
                 continue
 
+            lemma = row["lemma"].strip().lower()
+            pos = row.get("pos", "").strip().lower()
+
             raw_freq = row.get("frequency", "").strip()
-            freq = 0.0
+            freq = 0
             if raw_freq:
                 try:
-                    freq = float(raw_freq)
+                    freq = int(float(raw_freq))
                 except ValueError:
-                    pass
+                    freq = 0
 
+            # keep the highest freq seen for each word
             if word not in word_freqs or freq > word_freqs[word]:
                 word_freqs[word] = freq
+                word_pos[word] = pos
+                word_lemma[word] = lemma
 
-    words = sorted(word_freqs.keys())
+    # sort by frequency descending, then alphabetically for tie stability
+    words = sorted(word_freqs.keys(), key=lambda w: (-word_freqs[w], w))
     print(f"Loaded {len(words)} words")
-    return words, word_freqs
+
+    return words, word_freqs, word_pos, word_lemma
 
 
 # -------- EMBEDDINGS --------
@@ -105,67 +100,86 @@ def generate_embeddings(words):
 def build_frequency_bonus(words, word_freqs):
     raw = np.array([word_freqs.get(w, 0.0) for w in words], dtype=np.float32)
 
-    # amplify distribution slightly
     logged = np.log1p(raw) ** 1.3
 
     max_val = logged.max() if len(logged) else 1.0
-    if max_val <= 0:
-        return np.zeros_like(logged)
-
-    return logged / max_val
+    return logged / max_val if max_val > 0 else np.zeros_like(logged)
 
 
-# -------- MMR SELECTION --------
-def mmr_select(i, sims_row, candidate_indices, embeddings, freq_bonus, words):
+# -------- FAST MMR (LEMMA DEDUPE) --------
+def mmr_select_fast(
+    i,
+    sims_row,
+    candidate_indices,
+    embeddings,
+    freq_bonus,
+    words,
+    word_pos,
+    word_lemma,
+):
+    candidates = np.array(candidate_indices)
+
+    # similarity filter
+    sims = sims_row[candidates]
+    mask = sims > SIM_THRESHOLD
+    candidates = candidates[mask]
+
+    if len(candidates) == 0:
+        return []
+
+    candidate_embs = embeddings[candidates]
+    candidate_sims = sims_row[candidates]
+    candidate_freq = freq_bonus[candidates]
+
+    # base scoring
+    base_scores = (candidate_sims ** 1.5) + (candidate_freq * FREQ_WEIGHT)
+
     selected = []
-    selected_embs = []
-    seen = set()
+    selected_mask = np.zeros(len(candidates), dtype=bool)
+    max_sim_to_selected = np.zeros(len(candidates), dtype=np.float32)
 
-    base_key = dedupe_key(words[i])
-    seen.add(base_key)
+    # lemma + POS tracking
+    used_lemmas = set()
+    used_lemmas.add(word_lemma[words[i]])
 
-    candidates = list(candidate_indices)
+    base_pos = word_pos.get(words[i], "")
 
-    while candidates and len(selected) < TOP_K:
-        best_idx = None
-        best_score = -1e9
+    for _ in range(TOP_K):
+        scores = base_scores - (max_sim_to_selected * DIVERSITY_WEIGHT)
+        scores[selected_mask] = -1e9
 
-        for idx in candidates:
-            key = dedupe_key(words[idx])
-            if key in seen:
+        best_local_idx = np.argmax(scores)
+        best_global_idx = candidates[best_local_idx]
+
+        # block same lemma
+        lemma = word_lemma[words[best_global_idx]]
+        if lemma in used_lemmas:
+            selected_mask[best_local_idx] = True
+            continue
+
+        # optional POS filter
+        if USE_POS_FILTER:
+            if word_pos.get(words[best_global_idx], "") != base_pos:
+                selected_mask[best_local_idx] = True
                 continue
 
-            sim_score = sims_row[idx]
-            freq_score = freq_bonus[idx] * FREQ_WEIGHT
+        used_lemmas.add(lemma)
+        selected.append(best_global_idx)
+        selected_mask[best_local_idx] = True
 
-            # diversity penalty
-            if selected_embs:
-                sims_to_selected = embeddings[idx] @ np.stack(selected_embs).T
-                diversity_penalty = sims_to_selected.max()
-            else:
-                diversity_penalty = 0.0
+        # update diversity
+        new_sims = candidate_embs @ embeddings[best_global_idx]
+        max_sim_to_selected = np.maximum(max_sim_to_selected, new_sims)
 
-            score = sim_score + freq_score - (diversity_penalty * DIVERSITY_WEIGHT)
-
-            if score > best_score:
-                best_score = score
-                best_idx = idx
-
-        if best_idx is None:
+        if len(selected) >= TOP_K:
             break
-
-        selected.append(best_idx)
-        selected_embs.append(embeddings[best_idx])
-        seen.add(dedupe_key(words[best_idx]))
-
-        candidates.remove(best_idx)
 
     return [words[idx] for idx in selected]
 
 
 # -------- NEIGHBORS --------
-def compute_top_neighbors(words, embeddings, word_freqs):
-    print("Computing neighbors with MMR...")
+def compute_neighbors(words, embeddings, word_freqs, word_pos, word_lemma):
+    print("Computing neighbors...")
 
     n = len(words)
     neighbors = []
@@ -179,8 +193,8 @@ def compute_top_neighbors(words, embeddings, word_freqs):
         sims_batch = batch @ embeddings.T
 
         # remove self similarity
-        row_indices = np.arange(end - start)
-        sims_batch[row_indices, start + row_indices] = -1.0
+        row_idx = np.arange(end - start)
+        sims_batch[row_idx, start + row_idx] = -1.0
 
         top_idx_batch = np.argpartition(
             sims_batch, -CANDIDATE_POOL, axis=1
@@ -188,20 +202,19 @@ def compute_top_neighbors(words, embeddings, word_freqs):
 
         for local_i, candidate_indices in enumerate(top_idx_batch):
             i = start + local_i
-            word = words[i]
 
-            sims_row = sims_batch[local_i]
-
-            selected_words = mmr_select(
+            selected_words = mmr_select_fast(
                 i,
-                sims_row,
+                sims_batch[local_i],
                 candidate_indices,
                 embeddings,
                 freq_bonus,
-                words
+                words,
+                word_pos,
+                word_lemma,
             )
 
-            row = [word] + selected_words
+            row = [words[i], word_freqs.get(words[i], 0)] + selected_words
 
             if len(selected_words) < TOP_K:
                 row += [""] * (TOP_K - len(selected_words))
@@ -217,7 +230,7 @@ def compute_top_neighbors(words, embeddings, word_freqs):
 def save_csv(rows):
     print("Saving CSV...")
 
-    header = ["word"] + [f"n{i+1}" for i in range(TOP_K)]
+    header = ["word", "freq"] + [f"n{i+1}" for i in range(TOP_K)]
 
     with open("neighbors.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -229,11 +242,12 @@ def save_csv(rows):
 
 # -------- MAIN --------
 def main():
-    words, word_freqs = load_words_and_freqs()
+    words, word_freqs, word_pos, word_lemma = load_words()
     embeddings = generate_embeddings(words)
-    rows = compute_top_neighbors(words, embeddings, word_freqs)
-    save_csv(rows)
 
+    rows = compute_neighbors(words, embeddings, word_freqs, word_pos, word_lemma)
+
+    save_csv(rows)
     print("Done!")
 
 

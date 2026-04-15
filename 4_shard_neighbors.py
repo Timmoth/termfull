@@ -2,20 +2,22 @@ import csv
 import os
 
 # -------- CONFIG --------
-NUM_SHARDS = 500
 INPUT_FILE = "neighbors.csv"
 OUTPUT_DIR = "shards"
 MAX_NEIGHBOURS = 20
+MAX_FREQ = 100
+NUM_SHARDS = MAX_FREQ + 1
 # ------------------------
 
 
-def shard_id(word, num_shards):
-    """Deterministic string hash (must match frontend!)"""
-    word = word.lower().strip()
-    h = 0
-    for c in word:
-        h = (h * 31 + ord(c)) % num_shards
-    return h
+def parse_freq(value):
+    value = str(value).strip()
+    if not value:
+        return 0
+    try:
+        return int(float(value))
+    except ValueError:
+        return 0
 
 
 def main():
@@ -23,46 +25,39 @@ def main():
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Dynamically build header
-    header = ["lemma"] + [f"n{i+1}" for i in range(MAX_NEIGHBOURS)]
+    header = ["word", "freq"] + [f"n{i+1}" for i in range(MAX_NEIGHBOURS)]
 
-    # Create file handles for each shard
     shard_files = {}
     shard_writers = {}
 
     for i in range(NUM_SHARDS):
-        filename = os.path.join(OUTPUT_DIR, f"shard_{i:02d}.csv")
+        filename = os.path.join(OUTPUT_DIR, f"shard_{i:03d}.csv")
         f = open(filename, "w", newline="", encoding="utf-8")
         writer = csv.writer(f)
-
         writer.writerow(header)
 
         shard_files[i] = f
         shard_writers[i] = writer
 
-    # Read input and distribute rows
+    count = 0
+
     with open(INPUT_FILE, encoding="utf-8") as infile:
         reader = csv.DictReader(infile)
 
-        count = 0
-
         for row in reader:
-            lemma = row["lemma"]
-            sid = shard_id(lemma, NUM_SHARDS)
+            word = row["word"].strip()
+            freq = parse_freq(row.get("freq", 0))
+            freq = max(0, min(freq, MAX_FREQ))
 
-            # Collect neighbours dynamically
-            neighbours = [
-                row.get(f"n{i+1}", "") for i in range(MAX_NEIGHBOURS)
-            ]
+            neighbours = [row.get(f"n{i+1}", "") for i in range(MAX_NEIGHBOURS)]
 
-            shard_writers[sid].writerow([lemma] + neighbours)
+            shard_writers[freq].writerow([word, freq] + neighbours)
 
             count += 1
 
             if count % 1000 == 0:
                 print(f"Processed {count} rows...")
 
-    # Close all files
     for f in shard_files.values():
         f.close()
 

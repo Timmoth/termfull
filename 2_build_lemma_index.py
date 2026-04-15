@@ -2,30 +2,35 @@ import csv
 import spacy
 
 print("Loading spaCy model...")
-# Keep tagger + lemmatizer for POS + lemma, disable anything else
 nlp = spacy.load(
     "en_core_web_sm",
     disable=["parser", "ner", "textcat"]
 )
 
-# Store lemma → ID
+# Store lemma -> ID
 lemma_to_id = {}
 
 # Track duplicates
 seen_words = set()
 
-# Tune these for your machine / dataset size
 BATCH_SIZE = 2000
-N_PROCESS = 1  # set to -1 to use all CPU cores if that works well on your machine
+N_PROCESS = 1  # set to -1 if you want multiprocessing
 
 
 def parse_frequency(row):
-    value = row.get("frequency", "").strip()
-    if not value:
+    """
+    Accept either 'frequency' or 'quantized_score' from the input CSV.
+    Returns an integer if possible, otherwise empty string.
+    """
+    raw = (
+        row.get("freq", "").strip()
+    )
+
+    if not raw:
         return ""
 
     try:
-        return float(value)
+        return int(float(raw))
     except ValueError:
         return ""
 
@@ -38,7 +43,6 @@ def main():
 
     print("Reading words...")
 
-    # First collect unique words in input order, keeping frequency
     items = []
 
     with open("words_freq.csv", encoding="utf-8") as infile:
@@ -62,19 +66,21 @@ def main():
 
     with open("terms.csv", "w", newline="", encoding="utf-8") as outfile:
         writer = csv.writer(outfile)
-        writer.writerow(["id", "word", "lemma", "pos", "frequency"])
+        writer.writerow(["id", "word", "lemma", "frequency"])
 
         words = [item["word"] for item in items]
 
         for i, doc in enumerate(
             nlp.pipe(words, batch_size=BATCH_SIZE, n_process=N_PROCESS)
         ):
+            if not doc:
+                continue
+
             token = doc[0]
             word = items[i]["word"]
             frequency = items[i]["frequency"]
 
-            lemma = token.lemma_
-            pos = token.pos_.lower()
+            lemma = token.lemma_.lower().strip()
 
             # Skip weird outputs
             if not lemma.isalpha():
@@ -86,7 +92,7 @@ def main():
 
             lemma_id = lemma_to_id[lemma]
 
-            writer.writerow([lemma_id, word, lemma, pos, frequency])
+            writer.writerow([lemma_id, word, lemma, frequency])
             rows_written += 1
 
             if rows_written % 1000 == 0:

@@ -5,26 +5,54 @@
   <title>Termfull</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover">
 
   <style>
     * {
       user-select: none;
       -webkit-user-select: none;
       box-sizing: border-box;
-      touch-action: none; /* ✅ enables smooth dragging */
+      touch-action: none;
     }
 
     input {
       user-select: text;
       -webkit-user-select: text;
       touch-action: manipulation;
-      font-size: 16px; /* ✅ prevents zoom */
+      font-size: 16px;
     }
 
     body {
       font-family: "Inter", sans-serif;
+      height: 100dvh;
+      min-height: 100vh;
+      margin: 0;
     }
+
+    input:focus {
+      outline: none;
+    }
+
+@media (max-width: 768px) {
+        html, body {
+          position: fixed;
+          width: 100%;
+          height: 100dvh;
+          overflow: hidden;
+          background: #0a0a0a;
+        }
+        .relative.w-full.min-h-\[100dvh\] {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+        }
+        #search {
+          width: min(14rem, calc(100vw - 2rem)) !important;
+          max-width: 100% !important;
+        }
+      }
   </style>
 </head>
 
@@ -36,17 +64,17 @@
     <div class="absolute w-[600px] h-[600px] bg-indigo-500/10 blur-[120px] rounded-full left-[30%] top-[60%]"></div>
   </div>
 
-  <div class="relative w-full h-full flex items-center justify-center">
+  <div class="relative w-full min-h-[100dvh] flex items-center justify-center">
 
     <!-- search / autocomplete -->
     <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 w-[min(14rem,calc(100vw-2rem))]">
       <div class="relative">
         <!-- inline ghost text -->
         <div
-          id="ghost"
-          class="pointer-events-none absolute inset-0 px-6 py-4 text-lg rounded-2xl text-center text-white/20 whitespace-nowrap overflow-hidden flex items-center justify-center"
-          aria-hidden="true"
-        ></div>
+  id="ghost"
+  class="pointer-events-none absolute inset-0 px-6 py-4 text-lg rounded-2xl text-center text-white/20 whitespace-nowrap overflow-hidden flex items-center justify-center"
+  aria-hidden="true"
+></div>
 
 <input
   id="search"
@@ -89,16 +117,18 @@
   </div>
 
 <script>
-const NUM_SHARDS = 500;
+const NUM_SHARDS = 101;
 const shardCache = {};
 let animationFrame;
 let nodes = [];
 
 // -------- AUTOCOMPLETE --------
 let dictionary = [];
+let dictionaryFreqMap = {};
 let filteredSuggestions = [];
 let selectedSuggestionIndex = -1;
 let currentGhost = "";
+
 function getCenter() {
   if (window.visualViewport) {
     return {
@@ -114,26 +144,42 @@ function getCenter() {
 
 async function loadDictionary() {
   try {
-    const res = await fetch("words.csv");
+    const res = await fetch("words_freq.csv");
     const text = await res.text();
 
-    dictionary = text
-      .trim()
-      .split(/\r?\n/)
-      .slice(1)
-      .map(line => line.trim().toLowerCase())
-      .filter(Boolean);
+    const lines = text.trim().split(/\r?\n/);
+    dictionary = [];
+    dictionaryFreqMap = {};
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      const word = (cols[0] || "").trim().toLowerCase();
+      const freq = Number((cols[1] || "").trim());
+
+      if (!word) continue;
+      if (Number.isNaN(freq)) continue;
+
+      if (!(word in dictionaryFreqMap)) {
+        dictionary.push(word);
+        dictionaryFreqMap[word] = freq;
+      }
+    }
 
     dictionary = [...new Set(dictionary)];
   } catch (err) {
-    console.warn("Could not load words.csv for autocomplete", err);
+    console.warn("Could not load words_freq.csv for autocomplete", err);
   }
 }
 
 function setGhostText(inputValue, suggestion) {
   const ghost = document.getElementById("ghost");
 
-  if (!inputValue || !suggestion || !suggestion.startsWith(inputValue.toLowerCase()) || suggestion === inputValue.toLowerCase()) {
+  if (
+    !inputValue ||
+    !suggestion ||
+    !suggestion.startsWith(inputValue.toLowerCase()) ||
+    suggestion === inputValue.toLowerCase()
+  ) {
     ghost.textContent = "";
     currentGhost = "";
     return;
@@ -177,9 +223,18 @@ function renderSuggestions(inputValue) {
     } else if (word.includes(q)) {
       contains.push(word);
     }
-
-    if (starts.length >= 8 && contains.length >= 8) break;
   }
+
+  const byFreqDesc = (a, b) => {
+    const fa = dictionaryFreqMap[a] ?? -1;
+    const fb = dictionaryFreqMap[b] ?? -1;
+
+    if (fb !== fa) return fb - fa;
+    return a.localeCompare(b);
+  };
+
+  starts.sort(byFreqDesc);
+  contains.sort(byFreqDesc);
 
   filteredSuggestions = [...starts, ...contains].slice(0, 8);
 
@@ -201,15 +256,18 @@ function renderSuggestions(inputValue) {
 
   box.innerHTML = filteredSuggestions.map((word, i) => {
     const active = i === selectedSuggestionIndex;
+    const freq = dictionaryFreqMap[word] ?? "";
+
     return `
       <button
         type="button"
         data-index="${i}"
-        class="w-full text-left px-4 py-3 text-sm transition-colors ${
+        class="w-full flex items-center justify-between gap-3 px-4 py-3 text-sm transition-colors ${
           active ? "bg-white/12 text-white" : "text-white/75 hover:bg-white/8 hover:text-white"
         }"
       >
-        ${highlightMatch(word, q)}
+        <span>${highlightMatch(word, q)}</span>
+        <span class="text-xs text-white/35">${freq}</span>
       </button>
     `;
   }).join("");
@@ -268,7 +326,10 @@ function escapeHtml(str) {
 
 // -------- STYLE HELPERS --------
 function getSize(i, total) {
-  return 32 - (i / total) * 20;
+  const isMobile = window.innerWidth < 768;
+  const baseSize = isMobile ? 20 : 32;
+  const range = isMobile ? 12 : 20;
+  return baseSize - (i / total) * range;
 }
 
 function getOpacity(i, total) {
@@ -280,29 +341,28 @@ function getHue(i) {
   return hues[i % hues.length];
 }
 
-// -------- HASH --------
-function shardId(word) {
-  word = word.toLowerCase().trim();
-  let h = 0;
-  for (let i = 0; i < word.length; i++) {
-    h = (h * 31 + word.charCodeAt(i)) % NUM_SHARDS;
-  }
-  return h;
-}
-
 // -------- LOAD --------
 async function loadShard(id) {
   if (shardCache[id]) return shardCache[id];
 
-  const res = await fetch(`shards/shard_${String(id).padStart(2, '0')}.csv`);
+  const res = await fetch(`shards/shard_${String(id).padStart(3, "0")}.csv`);
   const text = await res.text();
 
-  const lines = text.trim().split("\n");
+  const lines = text.trim().split(/\r?\n/);
   const data = {};
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(",");
-    data[cols[0]] = cols.slice(1).filter(Boolean);
+    const word = (cols[0] || "").trim().toLowerCase();
+    const freq = (cols[1] || "").trim();
+    const neighbors = cols.slice(2).map(v => v.trim()).filter(Boolean);
+
+    if (!word) continue;
+
+    data[word] = {
+      freq,
+      neighbors
+    };
   }
 
   shardCache[id] = data;
@@ -310,9 +370,18 @@ async function loadShard(id) {
 }
 
 async function getNeighbors(word) {
-  const sid = shardId(word);
-  const shard = await loadShard(sid);
-  return shard[word] || null;
+  word = word.toLowerCase().trim();
+
+  const shardId = dictionaryFreqMap[word];
+  if (shardId === undefined || shardId === null || Number.isNaN(shardId)) {
+    return null;
+  }
+
+  const shard = await loadShard(shardId);
+  const row = shard[word];
+
+  if (!row) return null;
+  return row.neighbors || null;
 }
 
 async function performSearch(word) {
@@ -344,6 +413,7 @@ function createNodes(words) {
 
     const node = {
       word,
+      freq: i + 1,
       x: cx + Math.cos(angle) * radius,
       y: cy + Math.sin(angle) * radius,
       vx: 0,
@@ -366,7 +436,8 @@ function createNodes(words) {
     el.style.background = `hsla(${hue}, 70%, 60%, 0.08)`;
     el.style.color = `hsla(${hue}, 90%, 85%, ${getOpacity(i, words.length)})`;
 
-    // ✅ pointer events instead of mouse
+    el.innerHTML = `<span>${escapeHtml(word)}</span>`;
+
     el.addEventListener("pointerdown", (e) => {
       draggingNode = node;
       lastMouse.x = e.clientX;
@@ -402,6 +473,7 @@ function createNodes(words) {
     const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
     line.setAttribute("stroke", "#60a5fa");
     line.setAttribute("stroke-opacity", "0.12");
+    line.setAttribute("stroke-width", "3");
 
     svg.appendChild(line);
     node.line = line;
@@ -421,23 +493,20 @@ function updateNodes(words) {
 
   nodes.forEach((node, i) => {
     node.word = words[i] || "";
+    node.freq = i + 1;
     node.size = getSize(i, words.length);
 
-    node.el.textContent = node.word;
+    node.el.innerHTML = node.word ? `<span>${escapeHtml(node.word)}</span>` : "";
+
     node.el.style.fontSize = `${node.size}px`;
-    node.el.style.opacity = getOpacity(i, words.length);
+    node.el.style.opacity = node.word ? getOpacity(i, words.length) : 0;
+    node.el.style.visibility = node.word ? "visible" : "hidden";
   });
 }
 
 // -------- DRAG --------
 let draggingNode = null;
 let lastMouse = { x: 0, y: 0 };
-
-function startDrag(node, e) {
-  draggingNode = node;
-  lastMouse.x = e.clientX;
-  lastMouse.y = e.clientY;
-}
 
 window.addEventListener("mousemove", (e) => {
   if (!draggingNode) return;
@@ -462,8 +531,6 @@ window.addEventListener("mouseup", () => {
 // -------- ANIMATION --------
 function animate(time) {
   const { x: cx, y: cy } = getCenter();
-
-
   const centerRadius = 160;
 
   nodes.forEach(a => {
@@ -491,7 +558,6 @@ function animate(time) {
     }
   });
 
-  // soft repulsion
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i];
@@ -521,7 +587,6 @@ function animate(time) {
     }
   }
 
-  // hard collision
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i];
@@ -560,7 +625,6 @@ function animate(time) {
       n.y += n.vy;
     }
 
-    // apply position
     n.el.style.left = `${n.x}px`;
     n.el.style.top = `${n.y}px`;
     n.el.style.transform = "translate(-50%, -50%)";
@@ -574,18 +638,15 @@ function animate(time) {
     const minY = halfH;
     const maxY = window.innerHeight - halfH;
 
-    // hard clamp
     n.x = Math.max(minX, Math.min(maxX, n.x));
     n.y = Math.max(minY, Math.min(maxY, n.y));
 
     if (n.x === minX || n.x === maxX) n.vx *= -0.3;
     if (n.y === minY || n.y === maxY) n.vy *= -0.3;
 
-    // re-apply corrected position
     n.el.style.left = `${n.x}px`;
     n.el.style.top = `${n.y}px`;
 
-    // depth fade
     const dx = n.x - cx;
     const dy = n.y - cy;
     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -593,10 +654,9 @@ function animate(time) {
     const maxDist = Math.min(cx, cy);
     const fade = 1 - (dist / maxDist);
 
-n.el.style.opacity = Math.max(0.52, fade * 0.85);
-n.el.style.filter = `blur(${(1 - fade) * 0.5}px)`;
+    n.el.style.opacity = Math.max(0.52, fade * 0.85);
+    n.el.style.filter = `blur(${(1 - fade) * 0.5}px)`;
 
-    // update line
     const rect2 = n.el.getBoundingClientRect();
     const cx2 = rect2.left + rect2.width / 2;
     const cy2 = rect2.top + rect2.height / 2;
@@ -605,6 +665,7 @@ n.el.style.filter = `blur(${(1 - fade) * 0.5}px)`;
     n.line.setAttribute("y1", cy);
     n.line.setAttribute("x2", cx2);
     n.line.setAttribute("y2", cy2);
+    n.line.style.opacity = n.word ? "0.12" : "0";
   });
 
   animationFrame = requestAnimationFrame(animate);
@@ -689,6 +750,5 @@ window.addEventListener("resize", () => {
 // startup
 loadDictionary();
 </script>
-
 </body>
 </html>

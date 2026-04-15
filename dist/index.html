@@ -5,17 +5,21 @@
   <title>Termfull</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 
   <style>
     * {
       user-select: none;
       -webkit-user-select: none;
       box-sizing: border-box;
+      touch-action: none; /* ✅ enables smooth dragging */
     }
 
     input {
       user-select: text;
       -webkit-user-select: text;
+      touch-action: manipulation;
+      font-size: 16px; /* ✅ prevents zoom */
     }
 
     body {
@@ -95,6 +99,18 @@ let dictionary = [];
 let filteredSuggestions = [];
 let selectedSuggestionIndex = -1;
 let currentGhost = "";
+function getCenter() {
+  if (window.visualViewport) {
+    return {
+      x: window.visualViewport.width / 2,
+      y: window.visualViewport.height / 2
+    };
+  }
+  return {
+    x: window.innerWidth / 2,
+    y: window.innerHeight / 2
+  };
+}
 
 async function loadDictionary() {
   try {
@@ -317,8 +333,7 @@ function createNodes(words) {
   cloud.innerHTML = "";
   svg.innerHTML = "";
 
-  const cx = window.innerWidth / 2;
-  const cy = window.innerHeight / 2;
+  const { x: cx, y: cy } = getCenter();
 
   nodes = words.map((word, i) => {
     const angle = Math.random() * Math.PI * 2;
@@ -350,12 +365,34 @@ function createNodes(words) {
 
     el.style.background = `hsla(${hue}, 70%, 60%, 0.08)`;
     el.style.color = `hsla(${hue}, 90%, 85%, ${getOpacity(i, words.length)})`;
-    el.style.boxShadow = `0 0 20px hsla(${hue}, 80%, 60%, 0.15)`;
 
-    el.onmousedown = (e) => startDrag(node, e);
+    // ✅ pointer events instead of mouse
+    el.addEventListener("pointerdown", (e) => {
+      draggingNode = node;
+      lastMouse.x = e.clientX;
+      lastMouse.y = e.clientY;
+      el.setPointerCapture(e.pointerId);
+    });
+
+    el.addEventListener("pointerup", () => draggingNode = null);
+
+    el.addEventListener("pointermove", (e) => {
+      if (!draggingNode || draggingNode !== node) return;
+
+      const dx = e.clientX - lastMouse.x;
+      const dy = e.clientY - lastMouse.y;
+
+      node.x = e.clientX;
+      node.y = e.clientY;
+      node.vx = dx;
+      node.vy = dy;
+
+      lastMouse.x = e.clientX;
+      lastMouse.y = e.clientY;
+    });
+
     el.onclick = () => {
       search.value = node.word;
-      clearSuggestions();
       performSearch(node.word);
     };
 
@@ -372,7 +409,6 @@ function createNodes(words) {
     return node;
   });
 
-  updateNodes(words);
   animate(0);
 }
 
@@ -425,8 +461,8 @@ window.addEventListener("mouseup", () => {
 
 // -------- ANIMATION --------
 function animate(time) {
-  const cx = window.innerWidth / 2;
-  const cy = window.innerHeight / 2;
+  const { x: cx, y: cy } = getCenter();
+
 
   const centerRadius = 160;
 

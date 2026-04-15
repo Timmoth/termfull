@@ -130,6 +130,8 @@ let selectedSuggestionIndex = -1;
 let currentGhost = "";
 let dictionaryLoaded = false;
 const TOTAL_CHUNKS = 9;
+const loadedChunkIds = new Set();
+let dictionaryLoadPromise = null;
 
 function getCenter() {
   if (window.visualViewport) {
@@ -144,39 +146,69 @@ function getCenter() {
   };
 }
 
+async function loadDictionaryChunk(chunkIdx) {
+  if (loadedChunkIds.has(chunkIdx)) return false;
+
+  const chunkNum = String(chunkIdx).padStart(3, "0");
+  const res = await fetch(`words_freq_chunk_${chunkNum}.csv`);
+  const text = await res.text();
+  const lines = text.split('\n');
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(",");
+    const word = (cols[0] || "").trim().toLowerCase();
+    const freq = Number((cols[1] || "").trim());
+
+    if (!word) continue;
+    if (Number.isNaN(freq)) continue;
+
+    if (!(word in dictionaryFreqMap)) {
+      dictionary.push(word);
+      dictionaryFreqMap[word] = freq;
+    }
+  }
+
+  loadedChunkIds.add(chunkIdx);
+  return true;
+}
+
 async function loadDictionary() {
-  try {
-    // Load chunks progressively with backpressure control
-    for (let chunkIdx = 0; chunkIdx < TOTAL_CHUNKS; chunkIdx++) {
-      const chunkNum = String(chunkIdx).padStart(3, "0");
-      const res = await fetch(`words_freq_chunk_${chunkNum}.csv`);
-      const text = await res.text();
-      const lines = text.trim().split(/\r?\n/);
+  if (dictionaryLoadPromise) return dictionaryLoadPromise;
 
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(",");
-        const word = (cols[0] || "").trim().toLowerCase();
-        const freq = Number((cols[1] || "").trim());
-
-        if (!word) continue;
-        if (Number.isNaN(freq)) continue;
-
-        if (!(word in dictionaryFreqMap)) {
-          dictionary.push(word);
-          dictionaryFreqMap[word] = freq;
+  dictionaryLoadPromise = (async () => {
+    try {
+      for (let chunkIdx = 0; chunkIdx < TOTAL_CHUNKS; chunkIdx++) {
+        await loadDictionaryChunk(chunkIdx);
+        if (chunkIdx < TOTAL_CHUNKS - 1) {
+          await new Promise(resolve => setTimeout(resolve, 0));
         }
       }
-
-      // Yield to event loop between chunks
-      if (chunkIdx < TOTAL_CHUNKS - 1) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
+      dictionaryLoaded = true;
+    } catch (err) {
+      console.warn("Could not load words_freq chunks for autocomplete", err);
     }
+  })();
 
-    dictionaryLoaded = true;
-  } catch (err) {
-    console.warn("Could not load words_freq chunks for autocomplete", err);
+  return dictionaryLoadPromise;
+}
+
+async function findWordFreqProgressively(targetWord) {
+  const q = (targetWord || "").trim().toLowerCase();
+  if (!q) return null;
+
+  if (q in dictionaryFreqMap) {
+    return dictionaryFreqMap[q];
   }
+
+  for (let chunkIdx = 0; chunkIdx < TOTAL_CHUNKS; chunkIdx++) {
+    if (!loadedChunkIds.has(chunkIdx)) {
+      await loadDictionaryChunk(chunkIdx);
+    }
+    if (q in dictionaryFreqMap) {
+      return dictionaryFreqMap[q];
+    }
+  }
+  return null;
 }
 
 function setGhostText(inputValue, suggestion) {
@@ -213,6 +245,10 @@ function renderSuggestions(inputValue) {
 
   if (!inputValue) {
     clearSuggestions();
+    // Clear URL if no input
+    if (dictionaryLoaded) {
+      history.replaceState(null, '', window.location.pathname);
+    }
     return;
   }
 
@@ -316,6 +352,12 @@ function acceptSuggestion(index = null) {
   if (!chosen) return;
 
   search.value = chosen;
+  
+  // Update URL with chosen word
+  const params = new URLSearchParams(window.location.search);
+  params.set('q', chosen);
+  history.replaceState(null, '', `?${params.toString()}`);
+  
   clearSuggestions();
   performSearch(chosen);
 }
@@ -387,7 +429,11 @@ async function loadShard(id) {
 async function getNeighbors(word) {
   word = word.toLowerCase().trim();
 
-  const shardId = dictionaryFreqMap[word];
+  let shardId = dictionaryFreqMap[word];
+  if (shardId === undefined || shardId === null || Number.isNaN(shardId)) {
+    shardId = await findWordFreqProgressively(word);
+  }
+
   if (shardId === undefined || shardId === null || Number.isNaN(shardId)) {
     return null;
   }
@@ -401,12 +447,26 @@ async function getNeighbors(word) {
 
 async function performSearch(word) {
   word = word.toLowerCase().trim();
-  if (!word) return;
+  if (!word) return false;
 
-  const neighbors = await getNeighbors(word);
-  if (!neighbors) return;
+  let shardId = dictionaryFreqMap[word];
+  if (shardId === undefined || shardId === null || Number.isNaN(shardId)) {
+    shardId = await findWordFreqProgressively(word);
+  }
 
-  updateNodes(neighbors);
+  if (shardId === undefined || shardId === null || Number.isNaN(shardId)) {
+    return false;
+  }
+
+  const shard = await loadShard(shardId);
+  const row = shard[word];
+
+  if (!row || !row.neighbors || !row.neighbors.length) {
+    return false;
+  }
+
+  updateNodes(row.neighbors);
+  return true;
 }
 
 // -------- CREATE --------
@@ -479,6 +539,9 @@ function createNodes(words) {
 
     el.onclick = () => {
       search.value = node.word;
+      const params = new URLSearchParams(window.location.search);
+      params.set('q', node.word);
+      history.replaceState(null, '', `?${params.toString()}`);
       performSearch(node.word);
     };
 
@@ -694,9 +757,25 @@ search.addEventListener("input", (e) => {
   clearTimeout(timeout);
   renderSuggestions(e.target.value);
 
+  // Update URL query param
+  if (e.target.value) {
+    const params = new URLSearchParams(window.location.search);
+    params.set('q', e.target.value);
+    history.replaceState(null, '', `?${params.toString()}`);
+  } else {
+    history.replaceState(null, '', window.location.pathname);
+  }
+
   timeout = setTimeout(() => {
     performSearch(e.target.value);
   }, 200);
+});
+
+search.addEventListener("change", (e) => {
+  // Trigger search when user presses Enter or accepts a suggestion
+  if (e.target.value) {
+    performSearch(e.target.value);
+  }
 });
 
 search.addEventListener("keydown", (e) => {
@@ -713,6 +792,10 @@ search.addEventListener("keydown", (e) => {
     e.preventDefault();
     selectedSuggestionIndex = (selectedSuggestionIndex + 1) % filteredSuggestions.length;
     renderSuggestions(search.value);
+    // Update URL as we navigate
+    const params = new URLSearchParams(window.location.search);
+    params.set('q', filteredSuggestions[selectedSuggestionIndex]);
+    history.replaceState(null, '', `?${params.toString()}`);
     return;
   }
 
@@ -723,6 +806,10 @@ search.addEventListener("keydown", (e) => {
       ? filteredSuggestions.length - 1
       : selectedSuggestionIndex - 1;
     renderSuggestions(search.value);
+    // Update URL as we navigate
+    const params = new URLSearchParams(window.location.search);
+    params.set('q', filteredSuggestions[selectedSuggestionIndex]);
+    history.replaceState(null, '', `?${params.toString()}`);
     return;
   }
 
@@ -752,6 +839,15 @@ search.addEventListener("blur", () => {
 search.addEventListener("focus", () => {
   if (search.value.trim()) {
     renderSuggestions(search.value);
+    if (!dictionaryLoaded) {
+      // If dict still loading, trigger search after load completes
+      const checkLoad = setInterval(() => {
+        if (dictionaryLoaded) {
+          clearInterval(checkLoad);
+          performSearch(search.value);
+        }
+      }, 100);
+    }
   }
 });
 
@@ -763,7 +859,26 @@ window.addEventListener("resize", () => {
 });
 
 // startup
-loadDictionary();
+async function startup() {
+  const params = new URLSearchParams(window.location.search);
+  const query = params.get('q');
+
+  // Start full dictionary loading in background
+  loadDictionary();
+
+  if (query) {
+    const normalized = query.trim().toLowerCase();
+    search.value = normalized;
+
+    const ok = await performSearch(normalized);
+
+    if (!ok) {
+      console.warn("Could not resolve deep link query:", normalized);
+    }
+  }
+}
+
+startup();
 </script>
 </body>
 </html>

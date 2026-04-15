@@ -7,6 +7,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover">
 
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://termfull.app/" />
+  <meta property="og:title" content="Termfull - Interactive Word Cloud Explorer" />
+  <meta property="og:description" content="Explore word relationships in a beautiful interactive cloud. Type any word to discover semantic connections and explore the language space." />
+  <meta property="og:image" content="https://termfull.app/og-image.png" />
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image" />
+  <meta property="twitter:url" content="https://termfull.app/" />
+  <meta property="twitter:title" content="Termfull - Interactive Word Cloud Explorer" />
+  <meta property="twitter:description" content="Explore word relationships in a beautiful interactive cloud. Type any word to discover semantic connections and explore the language space." />
+  <meta property="twitter:image" content="https://termfull.app/og-image.png" />
+
   <style>
     * {
       user-select: none;
@@ -385,8 +399,8 @@ function escapeHtml(str) {
 // -------- STYLE HELPERS --------
 function getSize(i, total) {
   const isMobile = window.innerWidth < 768;
-  const baseSize = isMobile ? 20 : 32;
-  const range = isMobile ? 12 : 20;
+  const baseSize = isMobile ? 28 : 42;
+  const range = isMobile ? 18 : 28;
   return baseSize - (i / total) * range;
 }
 
@@ -937,6 +951,21 @@ function animateStars() {
 }
 
 window.addEventListener('resize', resizeStarCanvas);
+
+/*
+   ________________________________________
+  /                                        \
+ |   It's open source - just check out     |
+ |   the repo ;)                           |
+ |                                          |
+ |   https://github.com/Timmoth/termfull   |
+  \________________________________________/
+          \   ^__^
+           \  (oo)\_______
+              (__)\       )\/\
+                  ||----w |
+                  ||     ||
+*/
 
 // startup
 async function startup() {

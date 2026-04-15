@@ -83,21 +83,22 @@
   spellcheck="false"
   placeholder="Type a word..."
   class="relative z-10 w-full px-6 py-4 text-lg rounded-2xl
-  bg-white/[0.06] backdrop-blur-xl
-  border border-white/10
+  bg-white/[0.02] backdrop-blur-xl
+  border border-white/5
   text-white/80
   placeholder:text-white/30
-  focus:outline-none focus:ring-2 focus:ring-blue-400/30
+  focus:outline-none focus:ring-2 focus:ring-blue-400/20
   text-center
   shadow-[0_10px_40px_rgba(0,0,0,0.45)]"
 />
         <div
           id="suggestions"
-          class="absolute left-0 right-0 mt-3 hidden overflow-hidden rounded-2xl border border-white/10 bg-white/6 backdrop-blur-xl shadow-[0_20px_50px_rgba(0,0,0,0.35)]"
+           class="absolute left-0 right-0 mt-3 hidden overflow-hidden rounded-2xl border border-white/8 bg-white/[0.04] backdrop-blur-2xl shadow-[0_20px_50px_rgba(0,0,0,0.35)]"
         ></div>
       </div>
     </div>
 
+    <canvas id="stars" class="absolute inset-0 pointer-events-none"></canvas>
     <svg id="lines" class="absolute inset-0 w-full h-full"></svg>
     <div id="cloud" class="absolute inset-0"></div>
 
@@ -858,23 +859,106 @@ window.addEventListener("resize", () => {
   });
 });
 
+const GREETINGS = [
+  "hello", "welcome", "hey", "friend", "friends", "love", "happy", "joy", 
+  "smile", "sunshine", "bright", "warm", "kind", "peace", "hope", 
+  "cheers", "good", "morning", "night", "evening", "today", "mate"
+];
+
+function randomGreeting() {
+  return GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
+}
+
+// -------- STAR FIELD --------
+let starCanvas, starCtx;
+let stars = [];
+
+function initStarField() {
+  starCanvas = document.getElementById('stars');
+  starCtx = starCanvas.getContext('2d');
+  
+  resizeStarCanvas();
+  createStars();
+  animateStars();
+}
+
+function resizeStarCanvas() {
+  starCanvas.width = window.innerWidth;
+  starCanvas.height = window.innerHeight;
+}
+
+function createStars() {
+  stars = [];
+  const numStars = Math.floor((window.innerWidth * window.innerHeight) / 8000);
+  
+  for (let i = 0; i < numStars; i++) {
+    stars.push({
+      x: Math.random() * starCanvas.width,
+      y: Math.random() * starCanvas.height,
+      vx: (Math.random() - 0.5) * 0.2,
+      vy: (Math.random() - 0.5) * 0.2,
+      size: Math.random() * 1.5 + 0.5,
+      opacity: Math.random() * 0.6 + 0.2,
+      twinkleSpeed: Math.random() * 0.02 + 0.01,
+      twinkleOffset: Math.random() * Math.PI * 2
+    });
+  }
+}
+
+function animateStars() {
+  starCtx.clearRect(0, 0, starCanvas.width, starCanvas.height);
+  
+  const time = Date.now() * 0.001;
+  
+  stars.forEach(star => {
+    // Gentle drift
+    star.x += star.vx;
+    star.y += star.vy;
+    
+    // Wrap around screen
+    if (star.x < 0) star.x = starCanvas.width;
+    if (star.x > starCanvas.width) star.x = 0;
+    if (star.y < 0) star.y = starCanvas.height;
+    if (star.y > starCanvas.height) star.y = 0;
+    
+    const twinkle = Math.sin(time * 2 + star.twinkleOffset) * 0.3 + 0.7;
+    const opacity = star.opacity * twinkle;
+    
+    starCtx.beginPath();
+    starCtx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+    starCtx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+    starCtx.shadowBlur = 4;
+    starCtx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+    starCtx.fill();
+    starCtx.shadowBlur = 0;
+  });
+  
+  requestAnimationFrame(animateStars);
+}
+
+window.addEventListener('resize', resizeStarCanvas);
+
 // startup
 async function startup() {
   const params = new URLSearchParams(window.location.search);
-  const query = params.get('q');
+  let query = params.get('q');
+
+  // If no query param, pick a random greeting
+  if (!query) {
+    query = randomGreeting();
+  }
+
+  initStarField();
 
   // Start full dictionary loading in background
   loadDictionary();
 
-  if (query) {
-    const normalized = query.trim().toLowerCase();
-    search.value = normalized;
+  search.value = query.trim().toLowerCase();
 
-    const ok = await performSearch(normalized);
+  const ok = await performSearch(query.trim().toLowerCase());
 
-    if (!ok) {
-      console.warn("Could not resolve deep link query:", normalized);
-    }
+  if (!ok) {
+    console.warn("Could not resolve query:", query);
   }
 }
 

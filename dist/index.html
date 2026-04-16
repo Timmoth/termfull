@@ -68,6 +68,7 @@
         }
       }
   </style>
+
 </head>
 
 <body class="font-[Inter] bg-gradient-to-br from-gray-950 via-slate-900 to-gray-950 text-white h-screen flex items-center justify-center overflow-hidden">
@@ -132,6 +133,20 @@
   </div>
 
 <script>
+    /*
+   ________________________________________
+  /                                        \
+ |   It's open source - just check out     |
+ |   the repo ;)                           |
+ |                                          |
+ |   https://github.com/Timmoth/termfull   |
+  \________________________________________/
+          \   ^__^
+           \  (oo)\_______
+              (__)\       )\/\
+                  ||----w |
+                  ||     ||
+*/
 const NUM_SHARDS = 101;
 const shardCache = {};
 let animationFrame;
@@ -399,8 +414,8 @@ function escapeHtml(str) {
 // -------- STYLE HELPERS --------
 function getSize(i, total) {
   const isMobile = window.innerWidth < 768;
-  const baseSize = isMobile ? 28 : 42;
-  const range = isMobile ? 18 : 28;
+  const baseSize = isMobile ? 26 : 38;
+  const range = isMobile ? 16 : 26;
   return baseSize - (i / total) * range;
 }
 
@@ -527,6 +542,10 @@ function createNodes(words) {
     el.style.color = `hsla(${hue}, 90%, 85%, ${getOpacity(i, words.length)})`;
 
     el.innerHTML = `<span>${escapeHtml(word)}</span>`;
+
+    el.style.fontSize = `${size}px`;
+    el.style.opacity = getOpacity(i, words.length);
+    el.style.visibility = "visible";
 
     el.addEventListener("pointerdown", (e) => {
       draggingNode = node;
@@ -951,21 +970,6 @@ function animateStars() {
 }
 
 window.addEventListener('resize', resizeStarCanvas);
-
-/*
-   ________________________________________
-  /                                        \
- |   It's open source - just check out     |
- |   the repo ;)                           |
- |                                          |
- |   https://github.com/Timmoth/termfull   |
-  \________________________________________/
-          \   ^__^
-           \  (oo)\_______
-              (__)\       )\/\
-                  ||----w |
-                  ||     ||
-*/
 
 // startup
 async function startup() {
